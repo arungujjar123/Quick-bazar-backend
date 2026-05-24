@@ -49,7 +49,7 @@ app.use(express.json({ limit: "10mb" }));
 
 // ============ STEP 6: Root Route - Server Check Karne Ke Liye ============
 app.get("/", (req, res) => {
-  res.send("Welcome to the Mini Mart API");
+  res.send("Welcome to the Quickbazar API");
 });
 
 // ============ STEP 7: All API Routes Mount Karo ============
@@ -123,9 +123,11 @@ mongoose
 
     // Build RAG vector store on startup
     const { vectorStore } = require("./services/vectorStore");
-    vectorStore.build().catch((err) =>
-      console.error("Vector store initial build error:", err.message)
-    );
+    vectorStore
+      .build()
+      .catch((err) =>
+        console.error("Vector store initial build error:", err.message),
+      );
 
     // Ab server ko start karo aur specified PORT par listen karo
     app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
