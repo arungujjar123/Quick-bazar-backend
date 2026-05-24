@@ -40,8 +40,15 @@ const activityRoutes = require("./routes/activity"); // User activity tracking r
 const app = express();
 
 // ============ STEP 5: Middleware Setup Karo ============
-// CORS enable - Frontend (React) se backend (Express) ko requests bhej sake
-app.use(cors());
+// CORS enable - only allow the deployed frontend origin
+const corsOptions = {
+  origin: ["https://quick-bazar-frontend.vercel.app"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // JSON parser - Request body ko JSON format mein parse karta hai
 // Limit increased to 10MB for image uploads (multimodal search)
