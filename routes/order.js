@@ -6,7 +6,7 @@ const auth = require("../middleware/auth");
 const router = express.Router();
 
 // Checkout and create order
-router.post("/checkout", auth, async (req, res) => {
+router.post(["/", "/checkout"], auth, async (req, res) => {
   try {
     const cart = await Cart.findOne({ user: req.userId }).populate(
       "items.product",
@@ -65,10 +65,16 @@ router.post("/checkout", auth, async (req, res) => {
       0,
     );
 
+    // Calculate SuperAdmin commission (5%)
+    const platform_commission = totalAmount * 0.05;
+    const shop_payout = totalAmount - platform_commission;
+
     const order = new Order({
       user: req.userId,
       items: orderItems,
       total_amount: totalAmount,
+      platform_commission,
+      shop_payout,
       shipping_address: req.body.shipping_address || "",
     });
     await order.save();
@@ -93,7 +99,7 @@ router.post("/checkout", auth, async (req, res) => {
 });
 
 // Get user's orders
-router.get("/", auth, async (req, res) => {
+router.get(["/", "/user"], auth, async (req, res) => {
   try {
     const orders = await Order.find({ user: req.userId }).populate(
       "items.product",

@@ -211,5 +211,20 @@ router.post("/update", auth, async (req, res) => {
   }
 });
 
-// This route manages the user's cart: get, add, and remove items. It uses auth middleware to ensure the user is logged in.
+// Clear entire cart
+router.delete("/clear", auth, async (req, res) => {
+  try {
+    let cart = await Cart.findOne({ user: req.userId });
+    if (cart) {
+      cart.items = [];
+      await cart.save();
+    }
+    res.json({ message: "Cart cleared successfully", itemCount: 0 });
+  } catch (err) {
+    console.error("Error clearing cart:", err);
+    res.status(500).json({ message: "Failed to clear cart" });
+  }
+});
+
+// This route manages the user's cart: get, add, remove, update, and clear items. It uses auth middleware to ensure the user is logged in.
 module.exports = router;

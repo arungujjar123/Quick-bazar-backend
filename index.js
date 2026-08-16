@@ -33,6 +33,7 @@ const cartRoutes = require("./routes/cart"); // Cart add/remove/update routes
 const orderRoutes = require("./routes/order"); // Order creation/history routes
 const adminRoutes = require("./routes/admin"); // Admin dashboard/management routes
 const shopRoutes = require("./routes/shop"); // Shop listing/creation routes
+const superAdminRoutes = require("./routes/superadmin"); // SuperAdmin routes
 const supportRoutes = require("./routes/support"); // AI support assistant routes
 const activityRoutes = require("./routes/activity"); // User activity tracking routes
 
@@ -42,7 +43,11 @@ const app = express();
 // ============ STEP 5: Middleware Setup Karo ============
 // CORS enable - only allow the deployed frontend origin
 const corsOptions = {
-  origin: ["https://quick-bazar-frontend.vercel.app"],
+  origin: [
+    "https://quick-bazar-frontend.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+  ],
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
@@ -77,6 +82,9 @@ app.use("/api/admin", adminRoutes); // Admin login, dashboard, manage products/o
 
 // /api/shops - Shop listing/creation
 app.use("/api/shops", shopRoutes); // Shops list, nearby search, admin create
+
+// /api/superadmin - SuperAdmin dashboard
+app.use("/api/superadmin", superAdminRoutes);
 
 // /api/support - AI support assistant
 app.use("/api/support", supportRoutes);

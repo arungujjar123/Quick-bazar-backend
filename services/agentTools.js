@@ -118,7 +118,7 @@ async function compareProducts(productNames) {
 
     const comparison = products.map((p) => ({
       name: p.name,
-      price: `$${p.price}`,
+      price: `₹${p.price}`,
       category: p.category || "N/A",
       stock: p.stock > 0 ? `${p.stock} available` : "Out of stock",
       shop: p.shop?.name || "QuickBazaar",
@@ -240,7 +240,7 @@ async function findSimilar(productName) {
       data: similar.map((s) => ({
         id: s.id,
         name: s.title,
-        price: s.metadata?.price ? `$${s.metadata.price}` : "N/A",
+        price: s.metadata?.price ? `₹${s.metadata.price}` : "N/A",
         category: s.metadata?.category || "N/A",
         stock: s.metadata?.stock || 0,
         image: s.metadata?.image || "",
@@ -280,7 +280,7 @@ async function checkStock(productName) {
       name: p.name,
       stock: p.stock || 0,
       inStock: (p.stock || 0) > 0,
-      price: `$${p.price}`,
+      price: `₹${p.price}`,
       shop: p.shop?.name || "QuickBazaar",
       id: p._id.toString(),
     }));
@@ -351,14 +351,14 @@ async function getOrderStatus(userId, orderHint) {
     const orderData = filtered.slice(0, 3).map((order) => ({
       id: order._id.toString().slice(-6).toUpperCase(),
       status: order.order_status || "confirmed",
-      total: `$${order.total_amount || 0}`,
+      total: `₹${order.total_amount || 0}`,
       date: order.createdAt
         ? new Date(order.createdAt).toLocaleDateString()
         : "N/A",
       items: (order.items || []).map((item) => ({
         name: item.product?.name || "Product",
         quantity: item.quantity || 1,
-        price: `$${item.price || 0}`,
+        price: `₹${item.price || 0}`,
       })),
       paymentStatus: order.payment_status || "pending",
     }));
@@ -412,7 +412,7 @@ async function searchProducts(query) {
         data: products.map((p) => ({
           id: p._id.toString(),
           name: p.name,
-          price: `$${p.price}`,
+          price: `₹${p.price}`,
           category: p.category || "N/A",
           stock: p.stock || 0,
           image: p.imageUrl || p.image || "",
@@ -427,7 +427,7 @@ async function searchProducts(query) {
       data: results.map((r) => ({
         id: r.id,
         name: r.title,
-        price: r.metadata?.price ? `$${r.metadata.price}` : "N/A",
+        price: r.metadata?.price ? `₹${r.metadata.price}` : "N/A",
         category: r.metadata?.category || "N/A",
         stock: r.metadata?.stock || 0,
         image: r.metadata?.image || "",
@@ -515,11 +515,11 @@ async function addToCart(userId, productName, quantity = 1) {
       data: {
         product: product.name,
         quantity: quantity,
-        price: `$${product.price}`,
+        price: `₹${product.price}`,
         image: product.imageUrl || product.image || "",
         id: product._id.toString(),
       },
-      message: `✅ Added ${quantity}x ${product.name} ($${product.price}) to your cart!`,
+      message: `✅ Added ${quantity}x ${product.name} (₹${product.price}) to your cart!`,
     };
   } catch (error) {
     return {
@@ -566,7 +566,7 @@ async function getRecommendations(userId, userActivity) {
       data: recommendedProducts.map((p) => ({
         id: p._id.toString(),
         name: p.name,
-        price: `$${p.price}`,
+        price: `₹${p.price}`,
         category: p.category || "N/A",
         stock: p.stock || 0,
         image: p.imageUrl || p.image || "",
@@ -655,8 +655,33 @@ async function executeTool(toolName, args, userId) {
     case "add_to_cart":
       return addToCart(userId, args.product_name || "", args.quantity || 1);
 
-    case "get_recommendations":
-      return getRecommendations(userId, args.user_activity || null);
+    case "get_recommendations": {
+      // Fetch user activity server-side (the LLM doesn't have access to it)
+      let userActivity = null;
+      if (userId) {
+        try {
+          const UserActivity = require("../models/UserActivity");
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          const activities = await UserActivity.find({
+            user: userId,
+            createdAt: { $gte: thirtyDaysAgo },
+          }).sort({ createdAt: -1 }).limit(50);
+          if (activities.length > 0) {
+            const categoryScores = {};
+            activities.forEach((a) => {
+              if (a.category) {
+                const w = a.action === "purchase" ? 5 : a.action === "add_to_cart" ? 3 : a.action === "view_product" ? 2 : 1;
+                categoryScores[a.category] = (categoryScores[a.category] || 0) + w;
+              }
+            });
+            const topCategories = Object.entries(categoryScores).sort(([,a],[,b]) => b - a).slice(0, 3).map(([c]) => c);
+            if (topCategories.length > 0) userActivity = { topCategories };
+          }
+        } catch { /* non-critical */ }
+      }
+      return getRecommendations(userId, userActivity);
+    }
 
     case "find_nearby_shops":
       return findNearbyShops(args.city || "");
@@ -710,16 +735,38 @@ function buildAgentSystemPrompt(personalizationContext) {
  * Parse tool call from LLM response
  */
 function parseToolCall(response) {
-  const toolCallRegex = /TOOL_CALL:\s*(\{[\s\S]*?\})/;
-  const match = response.match(toolCallRegex);
-  if (!match) return null;
+  // Find TOOL_CALL: and then extract the JSON with balanced braces
+  const marker = "TOOL_CALL:";
+  const markerIndex = response.indexOf(marker);
+  if (markerIndex === -1) return null;
 
+  // Find the opening brace
+  const start = response.indexOf("{", markerIndex + marker.length);
+  if (start === -1) return null;
+
+  // Walk through the string counting braces to find the balanced closing brace
+  let depth = 0;
+  let end = -1;
+  for (let i = start; i < response.length; i++) {
+    if (response[i] === "{") depth++;
+    else if (response[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+
+  if (end === -1) return null;
+
+  const jsonStr = response.slice(start, end + 1);
   try {
-    const parsed = JSON.parse(match[1]);
+    const parsed = JSON.parse(jsonStr);
     return {
       tool: parsed.tool,
       args: parsed.args || {},
-      fullMatch: match[0],
+      fullMatch: response.slice(markerIndex, end + 1),
     };
   } catch (error) {
     return null;

@@ -89,7 +89,7 @@ router.post("/login", async (req, res) => {
     // Step 4: JWT token generate karo
     // Token payload mein userId daal do
     const token = jwt.sign(
-      { userId: user._id }, // Payload: user ki ID
+      { userId: user._id, name: user.name }, // Payload: user ki ID + name for personalization
       process.env.JWT_SECRET, // Secret key from .env
       { expiresIn: "1d" }, // Token 1 din valid rahega
     );

@@ -120,26 +120,31 @@ const buildPersonalizationContext = async (userId) => {
  * Call the Groq LLM
  */
 const callLLM = async (messages, temperature = 0.3) => {
-  const response = await axios.post(
-    GROQ_API_URL,
-    {
-      model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
-      messages,
-      temperature,
-      max_tokens: 800,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
+  try {
+    const response = await axios.post(
+      GROQ_API_URL,
+      {
+        model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        messages,
+        temperature,
+        max_tokens: 800,
       },
-    },
-  );
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
 
-  return (
-    response.data?.choices?.[0]?.message?.content?.trim() ||
-    "Sorry, I could not generate a response."
-  );
+    return (
+      response.data?.choices?.[0]?.message?.content?.trim() ||
+      "Sorry, I could not generate a response."
+    );
+  } catch (error) {
+    console.error("LLM Call Error:", error.response?.status, error.response?.data || error.message);
+    return "I am currently offline for maintenance or configuration. Please check the API key!";
+  }
 };
 
 // ============ ROUTES ============
@@ -221,7 +226,7 @@ router.post("/chat", async (req, res) => {
               (sum, item) => sum + (item.quantity || 0),
               0,
             );
-            return `Order ${order._id.toString().slice(-6).toUpperCase()}: ${itemCount} items, $${order.total_amount || 0}, status: ${order.order_status || "confirmed"}`;
+            return `Order ${order._id.toString().slice(-6).toUpperCase()}: ${itemCount} items, ₹${order.total_amount || 0}, status: ${order.order_status || "confirmed"}`;
           })
           .join("\n");
       }
@@ -429,7 +434,7 @@ router.post("/image-search", async (req, res) => {
       products: results.map((r) => ({
         id: r.id,
         name: r.title,
-        price: r.metadata?.price ? `$${r.metadata.price}` : "N/A",
+        price: r.metadata?.price ? `₹${r.metadata.price}` : "N/A",
         category: r.metadata?.category || "N/A",
         stock: r.metadata?.stock || 0,
         image: r.metadata?.image || "",

@@ -53,6 +53,18 @@ const orderSchema = new mongoose.Schema({
   // Total order amount (sabhi items ki price * quantity)
   total_amount: Number,
 
+  // SuperAdmin Platform Commission (e.g. 5%)
+  platform_commission: {
+    type: Number,
+    default: 0,
+  },
+
+  // Amount that goes to the shop owner (total_amount - platform_commission)
+  shop_payout: {
+    type: Number,
+    default: 0,
+  },
+
   // Payment method: "cod" (Cash on Delivery) ya "online"
   payment_method: {
     type: String,
