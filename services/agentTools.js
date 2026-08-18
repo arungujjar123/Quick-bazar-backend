@@ -718,7 +718,7 @@ function buildAgentSystemPrompt(personalizationContext) {
     `1. Use tools when the user asks to DO something (compare, check, search, add to cart).\n` +
     `2. For simple questions about policies, just answer directly from context.\n` +
     `3. Be concise and helpful. Don't invent data — use tools to fetch real data.\n` +
-    `4. Payments are cash on delivery only.\n` +
+    `4. Payments are on both way cash on delievery or either you can do online payment also.\n` +
     `5. Always be friendly and use emojis occasionally.\n` +
     `6. If you can't find what the user wants, suggest alternatives.\n` +
     `7. NEVER make up product names, prices, or stock data — always use tools.\n` +

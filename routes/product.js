@@ -128,8 +128,6 @@ router.get("/search", async (req, res) => {
 // Get featured products from different categories (max 5)
 router.get("/featured", async (req, res) => {
   try {
-    console.log("Featured products endpoint called");
-
     const shopFilter = buildShopFilter(req.query.shopId);
     if (shopFilter.error) {
       return res.status(400).json({ message: shopFilter.error });
@@ -137,7 +135,6 @@ router.get("/featured", async (req, res) => {
 
     // First, try to get products from different categories
     const allProducts = await Product.find(shopFilter);
-    console.log("Total products found:", allProducts.length);
 
     if (allProducts.length === 0) {
       return res.json([]);
@@ -152,8 +149,6 @@ router.get("/featured", async (req, res) => {
       }
       productsByCategory[category].push(product);
     });
-
-    console.log("Categories found:", Object.keys(productsByCategory));
 
     // Get one product from each category (max 5)
     const featuredProducts = [];
@@ -188,7 +183,6 @@ router.get("/featured", async (req, res) => {
       }
     }
 
-    console.log("Featured products selected:", featuredProducts.length);
     res.json(featuredProducts);
   } catch (err) {
     console.error("Error in featured products endpoint:", err);

@@ -34,13 +34,7 @@ router.post("/register", async (req, res) => {
     const ADMIN_SECRET_KEY =
       process.env.ADMIN_SECRET_KEY || "MINIMART_ADMIN_2024";
 
-    console.log("Admin registration attempt:", {
-      name,
-      email,
-      hasPassword: !!password,
-      secretKey: secretKey,
-      expectedSecretKey: ADMIN_SECRET_KEY,
-    });
+    console.log("Admin registration attempt:", { name, email, hasPassword: !!password });
 
     if (!secretKey) {
       console.log("No secret key provided");

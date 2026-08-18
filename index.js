@@ -127,10 +127,7 @@ const PORT = process.env.PORT || 5000;
 
 // ============ STEP 11: MongoDB Connect Karo Aur Server Start Karo ============
 mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true, // MongoDB connection string parser
-    useUnifiedTopology: true, // New connection management engine
-  })
+  .connect(process.env.MONGO_URI)
   .then(() => {
     // ✅ Agar MongoDB successfully connect ho gaya
     console.log("✅ MongoDB Atlas connected successfully");
