@@ -223,7 +223,7 @@ async function findSimilar(productName) {
     }
 
     // Use vector similarity
-    const similar = vectorStore.findSimilar(product._id.toString(), 4);
+    const similar = await vectorStore.findSimilar(product._id.toString(), 4);
 
     if (similar.length === 0) {
       return {
@@ -385,7 +385,7 @@ async function searchProducts(query) {
   try {
     await vectorStore.ensureBuilt();
 
-    const results = vectorStore.searchProducts(query, 5);
+    const results = await vectorStore.searchProducts(query, 5);
 
     if (results.length === 0) {
       // Fallback to regex search

@@ -10,6 +10,7 @@
     "support:sync": "node supportSync.js"
   },
   "dependencies": {
+    "@pinecone-database/pinecone": "^8.2.0",
     "axios": "^1.14.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

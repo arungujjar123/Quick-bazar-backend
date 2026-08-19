@@ -1,155 +1,62 @@
 /**
  * =====================================================
- * VECTOR STORE - TF-IDF based vector search engine
+ * VECTOR STORE - Pinecone Cloud Vector DB Integration
  * =====================================================
- *
- * Lightweight RAG implementation using TF-IDF vectors
- * stored in MongoDB. No external vector DB required.
- *
- * Features:
- * - Builds TF-IDF vectors from product/doc text
- * - Cosine similarity search for retrieval
- * - Auto-rebuilds on product changes
  */
 
+const { Pinecone } = require('@pinecone-database/pinecone');
 const Product = require("../models/Product");
+const Shop = require("../models/Shop");
 const SupportDoc = require("../models/SupportDoc");
 
-// ============ TF-IDF VECTORIZER ============
+// Initialize Pinecone Client
+const pc = new Pinecone({
+  apiKey: process.env.PINECONE_API_KEY
+});
 
-class TFIDFVectorizer {
-  constructor() {
-    this.vocabulary = new Map(); // word -> index
-    this.idf = new Map(); // word -> IDF score
-    this.vocabSize = 0;
-  }
-
-  /**
-   * Tokenize and normalize text
-   */
-  tokenize(text) {
-    return (text || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((word) => word.length > 1);
-  }
-
-  /**
-   * Build vocabulary and IDF from a corpus of documents
-   */
-  fit(documents) {
-    const docCount = documents.length;
-    const wordDocFrequency = new Map();
-
-    // Count document frequency for each word
-    documents.forEach((doc) => {
-      const words = new Set(this.tokenize(doc));
-      words.forEach((word) => {
-        wordDocFrequency.set(word, (wordDocFrequency.get(word) || 0) + 1);
-      });
-    });
-
-    // Build vocabulary (top 2000 words by document frequency)
-    const sortedWords = Array.from(wordDocFrequency.entries())
-      .filter(([, freq]) => freq >= 1 && freq < docCount * 0.95)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 2000);
-
-    this.vocabulary.clear();
-    this.idf.clear();
-    sortedWords.forEach(([word, freq], index) => {
-      this.vocabulary.set(word, index);
-      this.idf.set(word, Math.log((docCount + 1) / (freq + 1)) + 1);
-    });
-
-    this.vocabSize = this.vocabulary.size;
-  }
-
-  /**
-   * Transform a single document into a TF-IDF vector
-   */
-  transform(text) {
-    const tokens = this.tokenize(text);
-    const tf = new Map();
-    tokens.forEach((token) => {
-      tf.set(token, (tf.get(token) || 0) + 1);
-    });
-
-    const vector = new Array(this.vocabSize).fill(0);
-    const maxTF = Math.max(...tf.values(), 1);
-
-    tf.forEach((count, word) => {
-      const index = this.vocabulary.get(word);
-      if (index !== undefined) {
-        const normalizedTF = count / maxTF;
-        const idfScore = this.idf.get(word) || 0;
-        vector[index] = normalizedTF * idfScore;
-      }
-    });
-
-    // L2 normalize
-    const magnitude = Math.sqrt(
-      vector.reduce((sum, val) => sum + val * val, 0),
-    );
-    if (magnitude > 0) {
-      for (let i = 0; i < vector.length; i++) {
-        vector[i] /= magnitude;
-      }
-    }
-
-    return vector;
-  }
-}
-
-// ============ COSINE SIMILARITY ============
-
-function cosineSimilarity(vecA, vecB) {
-  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-
-  let dotProduct = 0;
-  let magnitudeA = 0;
-  let magnitudeB = 0;
-
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
-    magnitudeA += vecA[i] * vecA[i];
-    magnitudeB += vecB[i] * vecB[i];
-  }
-
-  magnitudeA = Math.sqrt(magnitudeA);
-  magnitudeB = Math.sqrt(magnitudeB);
-
-  if (magnitudeA === 0 || magnitudeB === 0) return 0;
-  return dotProduct / (magnitudeA * magnitudeB);
-}
-
-// ============ VECTOR STORE SINGLETON ============
+// Access Pinecone Index
+const indexName = process.env.PINECONE_INDEX || 'quickbazaar';
+const index = pc.Index(indexName);
 
 class VectorStore {
   constructor() {
-    this.vectorizer = new TFIDFVectorizer();
-    this.documents = []; // { id, type, title, text, vector, metadata }
     this.isBuilt = false;
     this.lastBuildTime = null;
   }
 
   /**
-   * Build the vector index from all products and support docs
+   * Generate Embeddings using Pinecone's serverless Inference API
+   */
+  async getEmbedding(text, isQuery = false) {
+    try {
+      const response = await pc.inference.embed({
+        model: 'multilingual-e5-large',
+        inputs: [text],
+        parameters: { inputType: isQuery ? 'query' : 'passage' }
+      });
+      return response.data[0].values;
+    } catch (error) {
+      console.error("❌ Pinecone Embedding Error:", error.message || error);
+      throw error;
+    }
+  }
+
+  /**
+   * Rebuild/Sync Pinecone index from MongoDB documents
    */
   async build() {
     try {
-      console.log("🔨 Building vector store...");
+      console.log("🔨 Syncing MongoDB data to Pinecone index...");
 
       const [products, supportDocs] = await Promise.all([
         Product.find().populate("shop", "name city address deliveryRadiusKm"),
         SupportDoc.find(),
       ]);
 
-      this.documents = [];
+      const vectorsToUpsert = [];
 
-      // Add products
-      products.forEach((product) => {
+      // 1. Process Products into Embeddings
+      for (const product of products) {
         const textParts = [
           product.name || "",
           product.description || "",
@@ -163,141 +70,135 @@ class VectorStore {
           textParts.push(product.shop.city || "");
         }
 
-        this.documents.push({
+        const text = textParts.join(" ");
+        const values = await this.getEmbedding(text, false);
+
+        vectorsToUpsert.push({
           id: product._id.toString(),
-          type: "product",
-          title: product.name,
-          text: textParts.join(" "),
+          values,
           metadata: {
-            price: product.price,
-            category: product.category,
+            id: product._id.toString(),
+            type: "product",
+            title: product.name || "",
+            text,
+            price: product.price || 0,
+            category: product.category || "",
             stock: product.stock || 0,
             image: product.imageUrl || product.image || "",
             shopName: product.shop?.name || "",
             shopCity: product.shop?.city || "",
-          },
+          }
         });
-      });
+      }
 
-      // Add support docs
-      supportDocs.forEach((doc) => {
-        this.documents.push({
+      // 2. Process Support Documents into Embeddings
+      for (const doc of supportDocs) {
+        const text = `${doc.title || ""} ${doc.content || ""}`;
+        const values = await this.getEmbedding(text, false);
+
+        vectorsToUpsert.push({
           id: doc._id.toString(),
-          type: doc.type || "doc",
-          title: doc.title,
-          text: `${doc.title} ${doc.content}`,
-          metadata: doc.metadata || {},
+          values,
+          metadata: {
+            id: doc._id.toString(),
+            type: doc.type || "doc",
+            title: doc.title || "",
+            text,
+          }
         });
-      });
+      }
 
-      // Fit vectorizer on all document texts
-      const allTexts = this.documents.map((doc) => doc.text);
-      this.vectorizer.fit(allTexts);
-
-      // Compute vectors for all documents
-      this.documents.forEach((doc) => {
-        doc.vector = this.vectorizer.transform(doc.text);
-      });
+      // Batch Upsert (Pinecone recommends upserting in batches of 50-100 vectors)
+      if (vectorsToUpsert.length > 0) {
+        const batchSize = 50;
+        for (let i = 0; i < vectorsToUpsert.length; i += batchSize) {
+          const batch = vectorsToUpsert.slice(i, i + batchSize);
+          await index.upsert(batch);
+        }
+      }
 
       this.isBuilt = true;
       this.lastBuildTime = new Date();
-      console.log(
-        `✅ Vector store built: ${this.documents.length} documents, ${this.vectorizer.vocabSize} vocabulary terms`,
-      );
+      console.log(`✅ Pinecone database successfully updated with ${vectorsToUpsert.length} vectors.`);
     } catch (error) {
-      console.error("❌ Vector store build error:", error.message);
-      this.isBuilt = false;
+      console.error("❌ Pinecone sync failed:", error.message || error);
     }
   }
 
   /**
-   * Search for the most relevant documents given a query
-   * @param {string} query - Search query text
-   * @param {number} topK - Number of results to return
-   * @param {string} filterType - Optional: filter by document type ('product', 'policy', etc.)
-   * @returns {Array} Ranked results with scores
+   * Query Pinecone for most relevant documents
    */
-  search(query, topK = 6, filterType = null) {
-    if (!this.isBuilt || this.documents.length === 0) {
+  async search(query, topK = 6, filterType = null) {
+    try {
+      const queryVector = await this.getEmbedding(query, true);
+      const filter = filterType ? { type: filterType } : undefined;
+
+      const queryResponse = await index.query({
+        vector: queryVector,
+        topK,
+        filter,
+        includeMetadata: true
+      });
+
+      return (queryResponse.matches || []).map(match => ({
+        id: match.metadata.id,
+        type: match.metadata.type,
+        title: match.metadata.title,
+        text: match.metadata.text,
+        metadata: match.metadata,
+        score: match.score
+      }));
+    } catch (error) {
+      console.error("❌ Pinecone query failed:", error.message || error);
       return [];
     }
-
-    const queryVector = this.vectorizer.transform(query);
-    let candidates = this.documents;
-
-    if (filterType) {
-      candidates = candidates.filter((doc) => doc.type === filterType);
-    }
-
-    const scored = candidates
-      .map((doc) => ({
-        id: doc.id,
-        type: doc.type,
-        title: doc.title,
-        text: doc.text,
-        metadata: doc.metadata,
-        score: cosineSimilarity(queryVector, doc.vector),
-      }))
-      .filter((result) => result.score > 0.01)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
-
-    return scored;
   }
 
   /**
    * Search specifically for products
    */
-  searchProducts(query, topK = 5) {
-    return this.search(query, topK, "product");
+  async searchProducts(query, topK = 5) {
+    return await this.search(query, topK, "product");
   }
 
   /**
-   * Find similar products to a given product ID
+   * Find similar products based on a product vector ID
    */
-  findSimilar(productId, topK = 5) {
-    const sourceDoc = this.documents.find(
-      (doc) => doc.id === productId && doc.type === "product",
-    );
-    if (!sourceDoc) return [];
+  async findSimilar(productId, topK = 5) {
+    try {
+      const queryResponse = await index.query({
+        id: productId,
+        topK: topK + 1,
+        includeMetadata: true
+      });
 
-    return this.documents
-      .filter((doc) => doc.type === "product" && doc.id !== productId)
-      .map((doc) => ({
-        id: doc.id,
-        type: doc.type,
-        title: doc.title,
-        metadata: doc.metadata,
-        score: cosineSimilarity(sourceDoc.vector, doc.vector),
-      }))
-      .filter((result) => result.score > 0.05)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
+      return (queryResponse.matches || [])
+        .filter(match => match.id !== productId)
+        .map(match => ({
+          id: match.metadata.id,
+          type: match.metadata.type,
+          title: match.metadata.title,
+          metadata: match.metadata,
+          score: match.score
+        }))
+        .slice(0, topK);
+    } catch (error) {
+      console.error("❌ Pinecone findSimilar failed:", error.message || error);
+      return [];
+    }
   }
 
-  /**
-   * Rebuild the index (call after product changes)
-   */
   async rebuild() {
     await this.build();
   }
 
-  /**
-   * Auto-build if not built or stale (> 30 mins)
-   */
   async ensureBuilt() {
-    const staleMs = 30 * 60 * 1000;
-    if (
-      !this.isBuilt ||
-      !this.lastBuildTime ||
-      Date.now() - this.lastBuildTime.getTime() > staleMs
-    ) {
+    if (!this.isBuilt) {
       await this.build();
     }
   }
 }
 
-// Singleton instance
 const vectorStore = new VectorStore();
 
-module.exports = { vectorStore, cosineSimilarity, TFIDFVectorizer };
+module.exports = { vectorStore };

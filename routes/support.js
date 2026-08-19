@@ -202,7 +202,7 @@ router.post("/chat", async (req, res) => {
     }
 
     // RAG: Vector search for relevant context
-    const ragResults = vectorStore.search(message, 6);
+    const ragResults = await vectorStore.search(message, 6);
     let ragContext = "";
     if (ragResults.length > 0) {
       ragContext = ragResults
@@ -412,7 +412,7 @@ router.post("/image-search", async (req, res) => {
 
     // Step 2: Use the description to search via RAG
     await vectorStore.ensureBuilt();
-    const results = vectorStore.searchProducts(description, 6);
+    const results = await vectorStore.searchProducts(description, 6);
 
     // Track activity
     const userId = getUserIdFromAuthHeader(req.headers.authorization);
