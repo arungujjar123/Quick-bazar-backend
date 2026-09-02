@@ -142,7 +142,19 @@ mongoose
       );
 
     // Ab server ko start karo aur specified PORT par listen karo
-    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+
+      // Start Live Inventory Auto-Sync Background Scheduler (Runs every 15 minutes)
+      const { syncAllActiveShops } = require("./services/inventorySync");
+      const SYNC_INTERVAL_MS = 15 * 60 * 1000;
+      setInterval(() => {
+        syncAllActiveShops().catch((err) =>
+          console.error("Auto-sync interval error:", err.message)
+        );
+      }, SYNC_INTERVAL_MS);
+      console.log("⏰ Background Inventory Auto-Sync Scheduler initialized (15m interval).");
+    });
   })
   .catch((err) => {
     // ❌ Agar MongoDB connection fail ho jaye

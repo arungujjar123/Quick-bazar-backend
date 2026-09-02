@@ -9,6 +9,9 @@ const User = require("../models/User");
 const Admin = require("../models/Admin");
 const Category = require("../models/Category");
 const Shop = require("../models/Shop");
+const XLSX = require("xlsx");
+const { uploadExcel } = require("../middleware/upload");
+const { syncShopInventory } = require("../services/inventorySync");
 
 const getAdminShopIds = async (adminId) => {
   if (adminId === "demo-admin") {
@@ -580,6 +583,382 @@ router.delete("/categories/:id", adminAuth, async (req, res) => {
   } catch (error) {
     console.error("Delete category error:", error.message);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ============================================================
+// BULK STOCK IMPORT VIA EXCEL / CSV FILE UPLOAD
+// ============================================================
+
+/*
+ * Smart Header Aliases - Dukandar ke Excel mein koi bhi column name ho,
+ * yeh function usse QuickBazaar schema mein map kar dega.
+ *
+ * Example: "Samagri Naam" → name, "Kimat" → price, "Matra" → stock
+ */
+const HEADER_ALIASES = {
+  name: [
+    "name", "product name", "product", "item", "item name",
+    "samagri", "samagri naam", "naam", "product_name", "itemname",
+    "title", "heading",
+  ],
+  price: [
+    "price", "rate", "kimat", "mrp", "cost", "amount",
+    "selling price", "selling_price", "unit price", "unit_price", "daam",
+  ],
+  stock: [
+    "stock", "qty", "quantity", "matra", "available",
+    "units", "count", "inventory", "remaining", "balance",
+  ],
+  category: [
+    "category", "varg", "type", "group", "vibhag",
+    "product category", "product_category", "section",
+  ],
+  description: [
+    "description", "vivaran", "details", "desc", "info",
+    "about", "product description", "product_description", "note",
+  ],
+};
+
+/**
+ * normalizeHeaders - Excel row ke header ko Product model ke field se match karta hai
+ * @param {Object} row - Ek row from Excel sheet (e.g., { "Item Name": "Atta", "Rate": 250 })
+ * @returns {Object} - Normalized object (e.g., { name: "Atta", price: 250 })
+ */
+const normalizeHeaders = (row) => {
+  const normalized = {};
+  const rowKeys = Object.keys(row);
+
+  for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+    for (const key of rowKeys) {
+      const lowerKey = key.toLowerCase().trim();
+      if (aliases.includes(lowerKey)) {
+        normalized[field] = row[key];
+        break;
+      }
+    }
+  }
+  return normalized;
+};
+
+// ============ GET: Download Sample Excel Template ============
+// Merchant is template ko download karke apni inventory bhar sakta hai
+router.get("/products/bulk-template", adminAuth, (req, res) => {
+  try {
+    // Sample data jo template mein dikhega
+    const sampleData = [
+      {
+        "Name": "Aashirvaad Atta 5kg",
+        "Price": 275,
+        "Stock": 50,
+        "Category": "Groceries",
+        "Description": "Premium whole wheat flour",
+      },
+      {
+        "Name": "Amul Taaza Milk 500ml",
+        "Price": 27,
+        "Stock": 100,
+        "Category": "Dairy & Bakery",
+        "Description": "Fresh toned milk",
+      },
+      {
+        "Name": "Maggi Noodles Pack",
+        "Price": 14,
+        "Stock": 200,
+        "Category": "Snacks & Drinks",
+        "Description": "2-minute instant noodles",
+      },
+    ];
+
+    // Excel workbook create karo
+    const worksheet = XLSX.utils.json_to_sheet(sampleData);
+
+    // Column widths set karo taaki template readable lage
+    worksheet["!cols"] = [
+      { wch: 25 }, // Name
+      { wch: 10 }, // Price
+      { wch: 10 }, // Stock
+      { wch: 20 }, // Category
+      { wch: 35 }, // Description
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Inventory");
+
+    // Excel file ko buffer mein generate karo
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+
+    // Response headers set karo for file download
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="QuickBazaar_Stock_Template.xlsx"'
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.send(buffer);
+  } catch (error) {
+    console.error("Template download error:", error.message);
+    res.status(500).json({ message: "Failed to generate template" });
+  }
+});
+
+// ============ POST: Bulk Upload Products from Excel/CSV ============
+// Merchant apni poori dukan ki inventory ek file mein upload kar sakta hai
+router.post(
+  "/products/bulk-upload",
+  adminAuth,
+  uploadExcel.single("file"),
+  async (req, res) => {
+    try {
+      const { shopId } = req.body;
+
+      // Validation: File uploaded hai ya nahi
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ message: "No file uploaded. Please select an Excel or CSV file." });
+      }
+
+      // Validation: Shop ID required hai
+      if (!shopId) {
+        return res
+          .status(400)
+          .json({ message: "Shop ID is required. Please select a shop." });
+      }
+
+      // Verify shop exists & belongs to this admin
+      const shop = await Shop.findById(shopId);
+      if (!shop) {
+        return res.status(404).json({ message: "Shop not found." });
+      }
+
+      // Demo admin check - allow all shops for demo
+      if (req.admin.id !== "demo-admin") {
+        if (shop.owner.toString() !== req.admin.id) {
+          return res
+            .status(403)
+            .json({ message: "You do not own this shop." });
+        }
+      }
+
+      // -------- EXCEL PARSING --------
+      // File buffer se workbook read karo
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0]; // Pehli sheet padho
+
+      if (!sheetName) {
+        return res
+          .status(400)
+          .json({ message: "Excel file is empty. No sheets found." });
+      }
+
+      // Sheet ko JSON array mein convert karo
+      const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+        defval: "", // Empty cells ko "" set karo
+      });
+
+      if (rawRows.length === 0) {
+        return res
+          .status(400)
+          .json({ message: "Excel file has no data rows. Please add product data." });
+      }
+
+      // -------- HEADER NORMALIZATION & VALIDATION --------
+      const validProducts = [];
+      const errors = [];
+
+      rawRows.forEach((row, index) => {
+        const normalized = normalizeHeaders(row);
+        const rowNumber = index + 2; // +2 because row 1 is header, data starts from row 2
+
+        // Name is required
+        if (!normalized.name || String(normalized.name).trim() === "") {
+          errors.push(`Row ${rowNumber}: Product name is missing`);
+          return;
+        }
+
+        // Price must be a valid number
+        const price = parseFloat(normalized.price);
+        if (isNaN(price) || price <= 0) {
+          errors.push(
+            `Row ${rowNumber}: Invalid price for "${normalized.name}"`
+          );
+          return;
+        }
+
+        // Stock defaults to 0 if not provided
+        const stock = parseInt(normalized.stock) || 0;
+
+        validProducts.push({
+          name: String(normalized.name).trim(),
+          price: price,
+          stock: stock,
+          category: String(normalized.category || "Groceries").trim(),
+          description: String(normalized.description || normalized.name).trim(),
+        });
+      });
+
+      if (validProducts.length === 0) {
+        return res.status(400).json({
+          message: "No valid products found in the file.",
+          errors: errors.slice(0, 10), // Pehle 10 errors dikhao
+        });
+      }
+
+      // -------- MONGODB BULK UPSERT --------
+      // Agar product pehle se hai (same name + same shop) toh UPDATE karo
+      // Agar nahi hai toh INSERT karo (upsert: true)
+      const bulkOps = validProducts.map((product) => ({
+        updateOne: {
+          filter: {
+            shop: shopId,
+            name: { $regex: new RegExp(`^${product.name}$`, "i") }, // Case-insensitive name match
+          },
+          update: {
+            $set: {
+              price: product.price,
+              stock: product.stock,
+              category: product.category,
+              description: product.description,
+              shop: shopId,
+            },
+          },
+          upsert: true, // Naya product banao agar exist nahi karta
+        },
+      }));
+
+      const result = await Product.bulkWrite(bulkOps);
+
+      // -------- RESPONSE --------
+      const summary = {
+        totalProcessed: validProducts.length,
+        created: result.upsertedCount || 0,
+        updated: result.modifiedCount || 0,
+        errors: errors.length,
+        errorDetails: errors.slice(0, 10),
+      };
+
+      res.json({
+        success: true,
+        message: `✅ ${summary.totalProcessed} products processed! ${summary.created} new products added, ${summary.updated} existing products updated.`,
+        summary,
+      });
+    } catch (error) {
+      console.error("Bulk upload error:", error.message);
+
+      // Multer-specific errors
+      if (error.code === "LIMIT_FILE_SIZE") {
+        return res
+          .status(400)
+          .json({ message: "File too large. Maximum size is 10MB." });
+      }
+
+      res.status(500).json({
+        message: error.message || "Bulk upload failed. Please try again.",
+      });
+    }
+  }
+);
+
+
+// ============================================================
+// LIVE AUTO-SYNC ENDPOINTS (ONEDRIVE / GOOGLE SHEETS)
+// ============================================================
+
+// PUT: Save Auto-Sync Configuration for a Shop
+router.put("/shops/:id/sync-config", adminAuth, async (req, res) => {
+  try {
+    const { syncUrl, syncEnabled } = req.body;
+    const shop = await Shop.findById(req.params.id);
+
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found." });
+    }
+
+    if (req.admin.id !== "demo-admin" && shop.owner.toString() !== req.admin.id) {
+      return res.status(403).json({ message: "You do not own this shop." });
+    }
+
+    shop.syncUrl = syncUrl !== undefined ? syncUrl.trim() : shop.syncUrl;
+    shop.syncEnabled = syncEnabled !== undefined ? Boolean(syncEnabled) : shop.syncEnabled;
+
+    await shop.save();
+
+    res.json({
+      success: true,
+      message: "Sync settings updated successfully.",
+      shop: {
+        id: shop._id,
+        name: shop.name,
+        syncUrl: shop.syncUrl,
+        syncEnabled: shop.syncEnabled,
+        lastSyncAt: shop.lastSyncAt,
+        lastSyncStatus: shop.lastSyncStatus,
+        lastSyncMessage: shop.lastSyncMessage,
+      },
+    });
+  } catch (error) {
+    console.error("Error saving sync config:", error);
+    res.status(500).json({ message: error.message || "Failed to update sync config" });
+  }
+});
+
+// POST: Trigger Immediate Manual Sync for a Shop
+router.post("/shops/:id/sync-now", adminAuth, async (req, res) => {
+  try {
+    const shop = await Shop.findById(req.params.id);
+
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found." });
+    }
+
+    if (req.admin.id !== "demo-admin" && shop.owner.toString() !== req.admin.id) {
+      return res.status(403).json({ message: "You do not own this shop." });
+    }
+
+    if (!shop.syncUrl) {
+      return res
+        .status(400)
+        .json({ message: "Please save a OneDrive or Google Sheet link first before syncing." });
+    }
+
+    // Trigger sync service (fetches file, parses, calls AI image fetcher, performs bulk write)
+    const result = await syncShopInventory(shop._id, true);
+
+    res.json({
+      success: true,
+      message: result.message,
+      result,
+    });
+  } catch (error) {
+    console.error("Sync error:", error.message);
+    res.status(400).json({
+      success: false,
+      message: error.message || "Sync failed. Please check your link.",
+    });
+  }
+});
+
+// GET: Fetch Current Sync Status & History for a Shop
+router.get("/shops/:id/sync-status", adminAuth, async (req, res) => {
+  try {
+    const shop = await Shop.findById(req.params.id);
+
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found." });
+    }
+
+    res.json({
+      syncUrl: shop.syncUrl || "",
+      syncEnabled: Boolean(shop.syncEnabled),
+      lastSyncAt: shop.lastSyncAt,
+      lastSyncStatus: shop.lastSyncStatus || "none",
+      lastSyncMessage: shop.lastSyncMessage || "",
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch sync status" });
   }
 });
 

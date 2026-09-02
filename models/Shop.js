@@ -40,6 +40,29 @@ const shopSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Auto-sync configuration for live OneDrive/Google Sheet link
+    syncUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    syncEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    lastSyncAt: {
+      type: Date,
+      default: null,
+    },
+    lastSyncStatus: {
+      type: String,
+      enum: ["success", "failed", "pending", "none"],
+      default: "none",
+    },
+    lastSyncMessage: {
+      type: String,
+      default: "",
+    },
   },
   {
     timestamps: true,
