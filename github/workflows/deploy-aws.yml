@@ -1,0 +1,45 @@
+name: Deploy Backend to AWS EC2 via Docker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**' # Jab backend code mein changes honge tabhi workflow chalega
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Repository Code Checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Docker Hub Login
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 3. Build & Push Docker Image to Docker Hub
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/quickbazaar-backend:latest
+
+      # 4. Deploy to AWS EC2 via SSH
+      - name: Deploy to AWS EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/quickbazaar-backend:latest
+            docker stop quickbazaar-backend || true
+            docker rm quickbazaar-backend || true
+            docker run -d --name quickbazaar-backend -p 5000:5000 --restart always --env-file .env ${{ secrets.DOCKERHUB_USERNAME }}/quickbazaar-backend:latest
