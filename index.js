@@ -61,7 +61,7 @@ app.use(express.json({ limit: "10mb" }));
 
 // ============ STEP 6: Root Route - Server Check Karne Ke Liye ============
 app.get("/", (req, res) => {
-  res.send("Welcome to the Quickbazar API");
+  res.send("Welcome to Quickbazaar AWS Docker API v2 - CI/CD Working!");
 });
 
 // ============ STEP 7: All API Routes Mount Karo ============
