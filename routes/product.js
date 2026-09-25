@@ -53,7 +53,7 @@ router.get("/nearby", async (req, res) => {
     }
 
     const radiusInRadians = radiusNum / 6371;
-    const shops = await Shop.find({
+    let shops = await Shop.find({
       ...filter,
       location: {
         $geoWithin: {
@@ -62,15 +62,23 @@ router.get("/nearby", async (req, res) => {
       },
     });
 
+    let isFallback = false;
+    if (shops.length === 0) {
+      shops = await Shop.find(filter);
+      isFallback = true;
+    }
+
     if (shops.length === 0) {
       return res.json([]);
     }
 
     const distanceByShopId = new Map();
     shops.forEach((shop) => {
-      const [shopLng, shopLat] = shop.location.coordinates;
-      const distanceKm = haversineKm(latNum, lngNum, shopLat, shopLng);
-      distanceByShopId.set(shop._id.toString(), Number(distanceKm.toFixed(2)));
+      if (shop.location && shop.location.coordinates) {
+        const [shopLng, shopLat] = shop.location.coordinates;
+        const distanceKm = haversineKm(latNum, lngNum, shopLat, shopLng);
+        distanceByShopId.set(shop._id.toString(), Number(distanceKm.toFixed(2)));
+      }
     });
 
     const shopIds = shops.map((shop) => shop._id);
@@ -82,7 +90,7 @@ router.get("/nearby", async (req, res) => {
     const withDistance = products.map((product) => {
       const shopId = product.shop?._id?.toString();
       const distanceKm = shopId ? distanceByShopId.get(shopId) : null;
-      return { ...product.toObject(), distanceKm };
+      return { ...product.toObject(), distanceKm, isFallback };
     });
 
     withDistance.sort((a, b) => {

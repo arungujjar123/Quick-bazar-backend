@@ -37,28 +37,58 @@ const getOwnedShop = async (shopId, adminId) => {
   return { shop };
 };
 
+const axios = require("axios");
+
+const geocodeAddress = async (address, city) => {
+  try {
+    const query = `${address || ""} ${city || ""}`.trim();
+    if (!query) return null;
+
+    const res = await axios.get(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`,
+      {
+        headers: { "User-Agent": "QuickBazaarApp/1.0" },
+        timeout: 5000,
+      }
+    );
+
+    if (res.data && res.data.length > 0) {
+      return {
+        lat: parseFloat(res.data[0].lat),
+        lng: parseFloat(res.data[0].lon),
+      };
+    }
+  } catch (err) {
+    console.warn("Geocoding shop address failed:", err.message);
+  }
+  return null;
+};
+
 // Create shop (admin only)
 router.post("/", adminAuth, async (req, res) => {
   try {
-    const { name, address, city, lat, lng, deliveryRadiusKm } = req.body;
-    const latNum = toNumber(lat);
-    const lngNum = toNumber(lng);
-    const radiusNum = toNumber(deliveryRadiusKm) ?? 5;
+    let { name, address, city, lat, lng, deliveryRadiusKm } = req.body;
+    let latNum = toNumber(lat) ?? 0;
+    let lngNum = toNumber(lng) ?? 0;
+    const radiusNum = toNumber(deliveryRadiusKm) ?? 50;
 
     if (!name || !address) {
       return res.status(400).json({ message: "Name and address are required" });
     }
 
-    if (latNum === null || lngNum === null) {
-      return res
-        .status(400)
-        .json({ message: "Valid latitude and longitude are required" });
+    // Auto-geocode if coordinates are 0 or missing
+    if (latNum === 0 && lngNum === 0) {
+      const geo = await geocodeAddress(address, city);
+      if (geo) {
+        latNum = geo.lat;
+        lngNum = geo.lng;
+      }
     }
 
     const shop = new Shop({
       name,
       address,
-      city,
+      city: city || address,
       location: { coordinates: [lngNum, latNum] },
       deliveryRadiusKm: radiusNum,
       owner: req.admin.id,
@@ -97,7 +127,14 @@ router.get("/", async (req, res) => {
         },
       });
 
+      if (shops.length === 0) {
+        shops = await Shop.find(filter);
+      }
+
       const withDistance = shops.map((shop) => {
+        if (!shop.location || !shop.location.coordinates) {
+          return { ...shop.toObject(), distanceKm: null };
+        }
         const [shopLng, shopLat] = shop.location.coordinates;
         const distanceKm = haversineKm(latNum, lngNum, shopLat, shopLng);
         return {
@@ -106,7 +143,11 @@ router.get("/", async (req, res) => {
         };
       });
 
-      withDistance.sort((a, b) => a.distanceKm - b.distanceKm);
+      withDistance.sort((a, b) => {
+        if (a.distanceKm === null) return 1;
+        if (b.distanceKm === null) return -1;
+        return a.distanceKm - b.distanceKm;
+      });
       return res.json(withDistance);
     }
 
@@ -124,6 +165,21 @@ router.get("/mine", adminAuth, async (req, res) => {
     const shops = await Shop.find({ owner: req.admin.id }).sort({
       createdAt: -1,
     });
+
+    for (const shop of shops) {
+      if (
+        !shop.location ||
+        !shop.location.coordinates ||
+        (shop.location.coordinates[0] === 0 && shop.location.coordinates[1] === 0)
+      ) {
+        const geo = await geocodeAddress(shop.address, shop.city);
+        if (geo) {
+          shop.location = { coordinates: [geo.lng, geo.lat] };
+          await shop.save();
+        }
+      }
+    }
+
     res.json(shops);
   } catch (error) {
     console.error("Get admin shops error:", error.message);
@@ -177,24 +233,24 @@ router.put("/:id", adminAuth, async (req, res) => {
       return res.status(status).json({ message });
     }
 
-    const latNum = toNumber(lat);
-    const lngNum = toNumber(lng);
+    let latNum = toNumber(lat);
+    let lngNum = toNumber(lng);
     const radiusNum = toNumber(deliveryRadiusKm);
-
-    if (
-      (lat !== undefined || lng !== undefined) &&
-      (latNum === null || lngNum === null)
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Valid latitude and longitude are required" });
-    }
 
     if (name !== undefined) shop.name = name;
     if (address !== undefined) shop.address = address;
     if (city !== undefined) shop.city = city;
     if (radiusNum !== null) shop.deliveryRadiusKm = radiusNum;
     if (isActive !== undefined) shop.isActive = isActive;
+
+    if (latNum === 0 && lngNum === 0) {
+      const geo = await geocodeAddress(shop.address, shop.city);
+      if (geo) {
+        latNum = geo.lat;
+        lngNum = geo.lng;
+      }
+    }
+
     if (latNum !== null && lngNum !== null) {
       shop.location.coordinates = [lngNum, latNum];
     }
