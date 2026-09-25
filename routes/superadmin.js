@@ -56,7 +56,7 @@ router.get("/shop-owners", superAdminAuth, async (req, res) => {
     
     // Get shops and shop count for each owner
     const ownersWithShops = await Promise.all(shopOwners.map(async (owner) => {
-      const shops = await Shop.find({ owner: owner._id }).select("_id name address city isActive deliveryRadiusKm createdAt");
+      const shops = await Shop.find({ owner: owner._id }).select("_id name address city pincode isActive deliveryRadiusKm createdAt");
       return {
         ...owner.toObject(),
         shops,

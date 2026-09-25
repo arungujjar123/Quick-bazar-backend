@@ -69,7 +69,7 @@ const geocodeAddress = async (address, city) => {
 // Create shop (admin only)
 router.post("/", adminAuth, async (req, res) => {
   try {
-    let { name, address, city, lat, lng, deliveryRadiusKm } = req.body;
+    let { name, address, city, pincode, lat, lng, deliveryRadiusKm } = req.body;
     let latNum = toNumber(lat) ?? 0;
     let lngNum = toNumber(lng) ?? 0;
     const radiusNum = toNumber(deliveryRadiusKm) ?? 50;
@@ -77,6 +77,8 @@ router.post("/", adminAuth, async (req, res) => {
     if (!name || !address) {
       return res.status(400).json({ message: "Name and address are required" });
     }
+
+    let extractedPincode = pincode || (address ? (address.match(/\b\d{6}\b/) || [])[0] : "") || "";
 
     // Auto-geocode if coordinates are 0 or missing
     if (latNum === 0 && lngNum === 0) {
@@ -91,6 +93,7 @@ router.post("/", adminAuth, async (req, res) => {
       name,
       address,
       city: city || address,
+      pincode: extractedPincode,
       location: { type: "Point", coordinates: [lngNum, latNum] },
       deliveryRadiusKm: radiusNum,
       owner: req.admin.id,

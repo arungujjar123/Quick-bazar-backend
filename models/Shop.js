@@ -16,6 +16,11 @@ const shopSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    pincode: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     location: {
       type: {
         type: String,
