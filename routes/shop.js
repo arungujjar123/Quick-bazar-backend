@@ -89,7 +89,7 @@ router.post("/", adminAuth, async (req, res) => {
       name,
       address,
       city: city || address,
-      location: { coordinates: [lngNum, latNum] },
+      location: { type: "Point", coordinates: [lngNum, latNum] },
       deliveryRadiusKm: radiusNum,
       owner: req.admin.id,
     });
@@ -174,7 +174,7 @@ router.get("/mine", adminAuth, async (req, res) => {
       ) {
         const geo = await geocodeAddress(shop.address, shop.city);
         if (geo) {
-          shop.location = { coordinates: [geo.lng, geo.lat] };
+          shop.location = { type: "Point", coordinates: [geo.lng, geo.lat] };
           await shop.save();
         }
       }
@@ -252,7 +252,7 @@ router.put("/:id", adminAuth, async (req, res) => {
     }
 
     if (latNum !== null && lngNum !== null) {
-      shop.location.coordinates = [lngNum, latNum];
+      shop.location = { type: "Point", coordinates: [lngNum, latNum] };
     }
 
     const updated = await shop.save();
