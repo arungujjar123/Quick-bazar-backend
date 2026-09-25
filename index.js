@@ -41,13 +41,9 @@ const activityRoutes = require("./routes/activity"); // User activity tracking r
 const app = express();
 
 // ============ STEP 5: Middleware Setup Karo ============
-// CORS enable - only allow the deployed frontend origin
 const corsOptions = {
-  origin: [
-    "https://quick-bazar-frontend.vercel.app",
-    "http://localhost:3000",
-    "http://localhost:5173",
-  ],
+  origin: true,
+  credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
