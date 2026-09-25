@@ -12,6 +12,7 @@ const Shop = require("../models/Shop");
 const XLSX = require("xlsx");
 const { uploadExcel } = require("../middleware/upload");
 const { syncShopInventory } = require("../services/inventorySync");
+const { fetchImageForProduct } = require("../services/imageFetcher");
 
 const getAdminShopIds = async (adminId) => {
   if (adminId === "demo-admin") {
@@ -264,6 +265,17 @@ router.get("/products", adminAuth, async (req, res) => {
     const products = await Product.find({ shop: { $in: shopIds } }).sort({
       createdAt: -1,
     });
+
+    // Auto-fix any missing product images in background/response
+    for (const p of products) {
+      if ((!p.image && !p.imageUrl) && p.name) {
+        const fetched = await fetchImageForProduct(p.name, p.category);
+        p.image = fetched;
+        p.imageUrl = fetched;
+        await p.save();
+      }
+    }
+
     res.json(products);
   } catch (error) {
     console.error("Get admin products error:", error.message);
@@ -290,12 +302,18 @@ router.post("/products", adminAuth, async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
+    let finalImg = imageUrl || req.body.image;
+    if (!finalImg && name) {
+      finalImg = await fetchImageForProduct(name, category);
+    }
+
     const newProduct = new Product({
       name,
-      description,
+      description: description || name,
       price,
-      category,
-      imageUrl,
+      category: category || "Groceries",
+      image: finalImg,
+      imageUrl: finalImg,
       stock: stock || 0,
       shop: shopId,
     });
@@ -769,14 +787,15 @@ router.post(
       const validProducts = [];
       const errors = [];
 
-      rawRows.forEach((row, index) => {
+      for (let index = 0; index < rawRows.length; index++) {
+        const row = rawRows[index];
         const normalized = normalizeHeaders(row);
         const rowNumber = index + 2; // +2 because row 1 is header, data starts from row 2
 
         // Name is required
         if (!normalized.name || String(normalized.name).trim() === "") {
           errors.push(`Row ${rowNumber}: Product name is missing`);
-          return;
+          continue;
         }
 
         // Price must be a valid number
@@ -785,20 +804,29 @@ router.post(
           errors.push(
             `Row ${rowNumber}: Invalid price for "${normalized.name}"`
           );
-          return;
+          continue;
         }
 
         // Stock defaults to 0 if not provided
         const stock = parseInt(normalized.stock) || 0;
+        const name = String(normalized.name).trim();
+        const category = String(normalized.category || "Groceries").trim();
+        let imgUrl = normalized.image || normalized.imageurl || normalized.imageUrl;
+
+        if (!imgUrl) {
+          imgUrl = await fetchImageForProduct(name, category);
+        }
 
         validProducts.push({
-          name: String(normalized.name).trim(),
+          name: name,
           price: price,
           stock: stock,
-          category: String(normalized.category || "Groceries").trim(),
-          description: String(normalized.description || normalized.name).trim(),
+          category: category,
+          description: String(normalized.description || name).trim(),
+          image: imgUrl,
+          imageUrl: imgUrl,
         });
-      });
+      }
 
       if (validProducts.length === 0) {
         return res.status(400).json({
@@ -818,10 +846,13 @@ router.post(
           },
           update: {
             $set: {
+              name: product.name,
               price: product.price,
               stock: product.stock,
               category: product.category,
               description: product.description,
+              image: product.image,
+              imageUrl: product.imageUrl,
               shop: shopId,
             },
           },
