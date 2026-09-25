@@ -26,12 +26,14 @@ const haversineKm = (lat1, lng1, lat2, lng2) => {
   return R * c;
 };
 
-const getOwnedShop = async (shopId, adminId) => {
+const getOwnedShop = async (shopId, adminReq) => {
   const shop = await Shop.findById(shopId);
   if (!shop) {
     return { status: 404, message: "Shop not found" };
   }
-  if (shop.owner.toString() !== adminId) {
+  const adminId = typeof adminReq === "object" ? adminReq.id : adminReq;
+  const isSuperAdmin = typeof adminReq === "object" && adminReq.role === "super_admin";
+  if (shop.owner.toString() !== adminId && !isSuperAdmin) {
     return { status: 403, message: "Access denied" };
   }
   return { shop };
@@ -268,15 +270,16 @@ router.delete("/:id", adminAuth, async (req, res) => {
   try {
     const { shop, status, message } = await getOwnedShop(
       req.params.id,
-      req.admin.id,
+      req.admin,
     );
 
     if (!shop) {
       return res.status(status).json({ message });
     }
 
+    await Product.deleteMany({ shop: shop._id });
     await Shop.findByIdAndDelete(shop._id);
-    res.json({ message: "Shop deleted successfully" });
+    res.json({ message: "Shop and all its products deleted successfully" });
   } catch (error) {
     console.error("Delete shop error:", error.message);
     res.status(500).json({ message: "Server error" });
