@@ -993,4 +993,15 @@ router.get("/shops/:id/sync-status", adminAuth, async (req, res) => {
   }
 });
 
+// GET: Fetch All Registered Customers for Admin
+router.get("/customers", adminAuth, async (req, res) => {
+  try {
+    const customers = await User.find().select("-password").sort({ createdAt: -1 });
+    res.json(customers);
+  } catch (error) {
+    console.error("Fetch customers error:", error.message);
+    res.status(500).json({ message: "Failed to fetch customers" });
+  }
+});
+
 module.exports = router;
