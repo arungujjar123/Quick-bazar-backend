@@ -58,7 +58,8 @@ function normalizeHeaders(row) {
 
   for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
     for (const key of rowKeys) {
-      const lowerKey = key.toLowerCase().trim();
+      if (!key) continue;
+      const lowerKey = String(key).toLowerCase().trim();
       if (aliases.includes(lowerKey)) {
         normalized[field] = row[key];
         break;
@@ -271,7 +272,9 @@ async function syncShopInventory(shopId, fetchMissingImages = true) {
   const existingProducts = await Product.find({ shop: shopId });
   const existingMap = new Map();
   existingProducts.forEach((p) => {
-    existingMap.set(p.name.toLowerCase().trim(), p);
+    if (p && p.name) {
+      existingMap.set(String(p.name).toLowerCase().trim(), p);
+    }
   });
 
   const bulkOps = [];
